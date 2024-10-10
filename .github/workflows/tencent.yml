@@ -1,79 +1,49 @@
-# This workflow will build a docker container, publish and deploy it to Tencent Kubernetes Engine (TKE) when there is a push to the "main" branch.
-#
-# To configure this workflow:
-#
-# 1. Ensure that your repository contains the necessary configuration for your Tencent Kubernetes Engine cluster,
-#    including deployment.yml, kustomization.yml, service.yml, etc.
-#
-# 2. Set up secrets in your workspace:
-#    - TENCENT_CLOUD_SECRET_ID with Tencent Cloud secret id
-#    - TENCENT_CLOUD_SECRET_KEY with Tencent Cloud secret key
-#    - TENCENT_CLOUD_ACCOUNT_ID with Tencent Cloud account id
-#    - TKE_REGISTRY_PASSWORD with TKE registry password
-#
-# 3. Change the values for the TKE_IMAGE_URL, TKE_REGION, TKE_CLUSTER_ID and DEPLOYMENT_NAME environment variables (below).
-
-name: Tencent Kubernetes Engine
-
+name: Build and Deploy
+# 监听 master 分支上的 push 事件
 on:
   push:
-    branches: [ "main" ]
-
-# Environment variables available to all jobs and steps in this workflow
-env:
-  TKE_IMAGE_URL: ccr.ccs.tencentyun.com/demo/mywebapp
-  TKE_REGION: ap-guangzhou
-  TKE_CLUSTER_ID: cls-mywebapp
-  DEPLOYMENT_NAME: tke-test
-
-permissions:
-  contents: read
-
+    branches:
+      - master
 jobs:
-  setup-build-publish-deploy:
-    name: Setup, Build, Publish, and Deploy
+  build-and-deploy:
+    # 构建环境使用 ubuntu
     runs-on: ubuntu-latest
-    environment: production
     steps:
+      # 官方action, 将代码拉取到虚拟机
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: false
 
-    - name: Checkout
-      uses: actions/checkout@v4
+      # 安装node.js
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18.18.2"
 
-    # Build
-    - name: Build Docker image
-      run: |
-        docker build -t ${TKE_IMAGE_URL}:${GITHUB_SHA} .
+      # 下载依赖、打包项目
+      - name: Install and Build
+        run: |
+          yarn install
+          yarn build
 
-    - name: Login TKE Registry
-      run: |
-        docker login -u ${{ secrets.TENCENT_CLOUD_ACCOUNT_ID }} -p '${{ secrets.TKE_REGISTRY_PASSWORD }}' ${TKE_IMAGE_URL}
-
-    # Push the Docker image to TKE Registry
-    - name: Publish
-      run: |
-        docker push ${TKE_IMAGE_URL}:${GITHUB_SHA}
-
-    - name: Set up Kustomize
-      run: |
-        curl -o kustomize --location https://github.com/kubernetes-sigs/kustomize/releases/download/v3.1.0/kustomize_3.1.0_linux_amd64
-        chmod u+x ./kustomize
-
-    - name: Set up ~/.kube/config for connecting TKE cluster
-      uses: TencentCloud/tke-cluster-credential-action@v1
-      with:
-        secret_id: ${{ secrets.TENCENT_CLOUD_SECRET_ID }}
-        secret_key: ${{ secrets.TENCENT_CLOUD_SECRET_KEY }}
-        tke_region: ${{ env.TKE_REGION }}
-        cluster_id: ${{ env.TKE_CLUSTER_ID }}
-
-    - name: Switch to TKE context
-      run: |
-        kubectl config use-context ${TKE_CLUSTER_ID}-context-default
-
-    # Deploy the Docker image to the TKE cluster
-    - name: Deploy
-      run: |
-        ./kustomize edit set image ${TKE_IMAGE_URL}:${GITHUB_SHA}
-        ./kustomize build . | kubectl apply -f -
-        kubectl rollout status deployment/${DEPLOYMENT_NAME}
-        kubectl get services -o wide
+      # 部署到服务器
+      - name: Upload to Deploy Server
+        uses: appleboy/scp-action@master
+        with:
+          # 服务器域名
+          host: ${{ secrets.SERVER_HOST }}
+          # 服务器用户名
+          username: ${{ secrets.SERVER_USERNAME }}
+          # 服务器密码
+          password: ${{ secrets.SERVER_PASSWORD }}
+          # 服务器端口
+          port: ${{ secrets.SERVER_PORT }}
+          # 指定上传的文件目录(项目配置的打包目录名称)
+          source: './.next/*'
+          # 指定上传服务器目录
+          target: '/var/www/movie'
+          # 解压时覆盖现有文件
+          overwrite: true
+          # 删除指定数量的前导路径元素
+          strip_components: 1
