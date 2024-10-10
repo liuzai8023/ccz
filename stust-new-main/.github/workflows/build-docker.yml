@@ -1,0 +1,70 @@
+name: Build and Release by Docker
+
+on:
+  push:
+    branches: [main]
+    tags-ignore:
+      - "v*.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the code from the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Set up Node.js environment
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      # Install dependencies in the root directory
+      - name: Install dependencies in root
+        run: npm install
+
+      # Install dependencies in the stust-server directory
+      - name: Install dependencies in stust-server
+        run: npm install
+        working-directory: ./stust-server
+
+      - name: Set environment variables
+        run: |
+          echo "VITE_IMAGE_TAG=$(date -u +"%Y%m%d%H%M" -d "+8 hours")" >> $GITHUB_ENV
+          echo "VITE_GIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "VITE_RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
+
+      # Build frontend and server
+      - name: Build ALL
+        run: npm run build:all
+
+      # Delete and Create release directory and copy build artifacts
+      - name: Create release directory
+        run: |
+          rm -rf release
+          mkdir release
+      - name: Copy stust-server dist to release
+        run: cp -R stust-server/dist/* release/
+      - name: Copy root dist to release
+        run: |
+          mkdir release/static
+          cp -R dist/* release/static
+          if [ -d "public" ]; then cp -R public/* release/static; fi
+
+      # Config Aliyun CLI
+      - name: Config Alibaba Cloud CLI
+        run: |
+          aliyun configure set --access-key-id ${{ secrets.ALIYUN_ACCESS_KEY_ID }} --access-key-secret ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }} --region cn-hangzhou
+
+      # Create Docker image and push to Aliyun
+      - name: Build Docker image
+        run: |
+          TIMESTAMP=$(date -u +"%Y%m%d%H%M" -d "+8 hours")
+          echo ${{ secrets.ALIYUN_DOCKER_PASSWORD }} | docker login --username ${{ secrets.ALIYUN_USERNAME }} registry.cn-hangzhou.aliyuncs.com --password-stdin
+          docker build -t registry.cn-hangzhou.aliyuncs.com/magicalcarl/stust:$TIMESTAMP .
+          docker push registry.cn-hangzhou.aliyuncs.com/magicalcarl/stust:$TIMESTAMP
+          aliyun fc PUT /2023-03-30/functions/stust --header "Content-Type=application/json;" --body " \
+            {\"tracingConfig\":{},\"customContainerConfig\":{\"image\":\"registry-vpc.cn-hangzhou.aliyuncs.com/magicalcarl/stust:$TIMESTAMP\"}}"

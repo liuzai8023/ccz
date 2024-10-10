@@ -1,0 +1,74 @@
+name: Build and Release by Docker
+
+on:
+  push:
+    tags:
+      - "v*.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the code from the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Set up Node.js environment
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      # Install dependencies in the root directory
+      - name: Install dependencies in root
+        run: npm install
+
+      # Install dependencies in the stust-server directory
+      - name: Install dependencies in stust-server
+        run: npm install
+        working-directory: ./stust-server
+
+      - name: Set environment variables
+        run: |
+          echo "VITE_IMAGE_TAG=$(date -u +"%Y%m%d%H%M" -d "+8 hours")" >> $GITHUB_ENV
+          echo "VITE_GIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "VITE_RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
+
+      # Build frontend only
+      - name: Build Frontend
+        run: npm run build:frontend
+
+      # Delete and Create release directory and copy build artifacts
+      - name: Create release directory
+        run: |
+          rm -rf release
+          mkdir release
+      - name: Copy stust-server to release
+        run: cp -R stust-server/* release/
+      - name: Copy root dist to release
+        run: |
+          mkdir release/static
+          cp -R dist/* release/static
+          if [ -d "public" ]; then cp -R public/* release/static; fi
+
+      # Config Aliyun CLI
+      - name: Config Alibaba Cloud CLI
+        run: |
+          aliyun configure set --access-key-id ${{ secrets.ALIYUN_ACCESS_KEY_ID }} --access-key-secret ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }} --region cn-hangzhou
+
+      - name: Compress release directory
+        run: |
+          cd release
+          zip -r ../release.zip .
+
+      - name: Encode release.zip to base64
+        run: |
+          base64 release.zip > release.zip.b64
+
+      - name: Update Ali FC
+        run: |
+          BASE64_ENCODED_ZIP=$(cat release.zip.b64)
+          aliyun fc PUT /2023-03-30/functions/stust --header "Content-Type=application/json;" --body \
+          "{\"tracingConfig\":{},\"code\":{\"zipFile\":\"$BASE64_ENCODED_ZIP\"}}"
